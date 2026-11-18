@@ -60,6 +60,9 @@ mod tests {
         let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         Command::new(shell)
+            // A parent pwsh 7 exports an incompatible module search path for
+            // inbox Windows PowerShell. Let it construct its own defaults.
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env("RTK_TEST_ACL_PATH", path)
             .env("RTK_TEST_ACL_SDDL", sddl)
