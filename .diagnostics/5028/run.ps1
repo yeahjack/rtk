@@ -15,7 +15,7 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $repo = Join-Path $work 'repo'
 & $git init -q $repo
 if ($LASTEXITCODE) { throw 'git init failed' }
-$rtks = @()
+$rtks = @((Resolve-Path 'target/debug/rtk.exe').Path)
 foreach ($tag in @('v1.1.0','v1.2.0')) {
   $release = gh api "repos/rtk-ai/rtk/releases/tags/$tag" | ConvertFrom-Json
   if ($LASTEXITCODE) { throw 'release lookup failed' }
@@ -55,14 +55,14 @@ foreach ($kind in @('control','metadata-denied','execute-denied','read-denied'))
     foreach ($rtk in $rtks) {
       & $rtk --version
       & $rtk git status 2>&1 | ForEach-Object { Write-Output $_ }
-      Write-Output "rtk git status exit=$LASTEXITCODE"
+      Write-Output "rtk git status exit=$LASTEXITCODE binary=$rtk"
     }
     $env:PATH = "$originalPath;$bad"
     Write-Output "=== $kind restricted candidate LAST ==="
     & $probe $bad
     foreach ($rtk in $rtks) {
       & $rtk git status 2>&1 | ForEach-Object { Write-Output $_ }
-      Write-Output "rtk git status exit=$LASTEXITCODE"
+      Write-Output "rtk git status exit=$LASTEXITCODE binary=$rtk"
     }
   } finally {
     $env:PATH = $originalPath

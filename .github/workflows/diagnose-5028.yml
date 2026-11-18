@@ -13,6 +13,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
       - name: Build isolated resolver probe
         run: cargo build --manifest-path .diagnostics/5028/probe/Cargo.toml
+      - name: Test resolver under default and custom PATHEXT
+        shell: pwsh
+        run: |
+          cargo test --manifest-path .diagnostics/5028/probe/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:PATHEXT = '.CMD;.EXE;.BAT'
+          cargo test --manifest-path .diagnostics/5028/probe/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build patched RTK
+        run: cargo build --no-default-features
       - name: Compare temporary ACL fixtures
         shell: pwsh
         env:
