@@ -57,8 +57,7 @@ mod tests {
     }
 
     fn powershell(path: &Path, script: &str, sddl: &str) -> std::process::Output {
-        let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let shell = which::which("powershell.exe").expect("Windows PowerShell must be on PATH");
         Command::new(shell)
             // A parent pwsh 7 exports an incompatible module search path for
             // inbox Windows PowerShell. Let it construct its own defaults.
