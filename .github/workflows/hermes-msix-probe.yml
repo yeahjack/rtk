@@ -7,7 +7,7 @@ permissions:
 jobs:
   probe:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - name: Inspect disposable runner capabilities
         shell: pwsh
@@ -24,7 +24,7 @@ jobs:
         run: |
           foreach ($channel in 'stable','canary') {
             $url = "https://hermes-assets.nousresearch.com/releases/win32/$channel/$channel.appinstaller"
-            try { $response = Invoke-WebRequest $url; "URL=$url HTTP=$($response.StatusCode)"; $response.Content }
+            try { $response = Invoke-WebRequest $url; "URL=$url HTTP=$($response.StatusCode)"; [Text.Encoding]::UTF8.GetString($response.Content) }
             catch { "URL=$url ERROR=$($_.Exception.Message)" }
           }
           if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -44,14 +44,32 @@ jobs:
           $bundle = $xml.AppInstaller.MainBundle
           if ($bundle.Name -ne 'NousResearch.HermesBundled' -or $bundle.Publisher -ne 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US') { throw 'Unexpected official feed identity' }
           if (([uri]$bundle.Uri).Host -ne 'hermes-assets.nousresearch.com' -or ([uri]$bundle.Uri).Scheme -ne 'https') { throw 'Unexpected artifact origin' }
-          $file = Join-Path $env:RUNNER_TEMP 'hermes.msixbundle'
-          Invoke-WebRequest $bundle.Uri -OutFile $file
-          Get-FileHash $file -Algorithm SHA256 | Format-List
+          $file = Join-Path $env:RUNNER_TEMP 'hermes.msix'
+          $artifactUri = 'https://hermes-assets.nousresearch.com/releases/tag/rc.3-v0.22.0/HermesBundled-0.22.0-win-x64.msix'
+          # Official handoff-win32-x64.json binds this file to e06df9c2eae6901f4c88f464e0ae6e753c0428b8.
+          $expectedHash = 'ADD268E6D6A02F7A4510E040B7513CD1C8DD4E5FF24AF4E90462D962599C847C'
+          "DOWNLOADING $artifactUri at $(Get-Date -Format o)"
+          curl.exe --fail --location --retry 2 --max-time 1000 --output $file $artifactUri
+          if ($LASTEXITCODE) { throw "Official package download failed: $LASTEXITCODE" }
+          "DOWNLOADED $((Get-Item $file).Length) bytes at $(Get-Date -Format o)"
+          $hash = Get-FileHash $file -Algorithm SHA256
+          $hash | Format-List
+          if ($hash.Hash -ne $expectedHash) { throw "Official receipt hash mismatch" }
           $signature = Get-AuthenticodeSignature $file
           $signature | Select-Object Status,StatusMessage,SignerCertificate | Format-List
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -ne $bundle.Publisher) { throw 'Not a trusted matching publisher signature' }
           try {
-            Add-AppxPackage -Path $file -ErrorAction Stop
+            "INSTALLING at $(Get-Date -Format o)"
+            $deployment = Start-Job -ArgumentList $file -ScriptBlock { param($path) Add-AppxPackage -Path $path -ErrorAction Stop }
+            $deadline = (Get-Date).AddMinutes(20)
+            while ($deployment.State -eq 'Running' -and (Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 30
+              "DEPLOYMENT state=$($deployment.State) at $(Get-Date -Format o)"
+              Get-WinEvent -LogName 'Microsoft-Windows-AppXDeploymentServer/Operational' -MaxEvents 3 -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | Format-List
+            }
+            if ($deployment.State -eq 'Running') { throw 'Deployment did not finish within 20 minutes; no trust/security changes attempted' }
+            Receive-Job $deployment -ErrorAction Stop
+            if ($deployment.State -ne 'Completed') { throw "Deployment job failed: $($deployment.State)" }
             $pkg = Get-AppxPackage -Name $bundle.Name
             $pkg | Select-Object Name,Version,PackageFullName,PackageFamilyName,InstallLocation | Format-List
             $manifest = Get-AppxPackageManifest -Package $pkg.PackageFullName
