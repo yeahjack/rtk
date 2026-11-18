@@ -7,8 +7,24 @@ permissions:
 jobs:
   probe:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 9ea44f1bccd26440eb20638a7d9cbdd502a44caa
+          path: rtk-final
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build exact final RTK fix for original x64 architecture
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+        run: cargo build --locked --manifest-path rtk-final/Cargo.toml --no-default-features --target x86_64-pc-windows-msvc
       - name: Inspect disposable runner capabilities
         shell: pwsh
         run: |
@@ -72,6 +88,7 @@ jobs:
             if ($deployment.State -ne 'Completed') { throw "Deployment job failed: $($deployment.State)" }
             $pkg = Get-AppxPackage -Name $bundle.Name
             $pkg | Select-Object Name,Version,PackageFullName,PackageFamilyName,InstallLocation | Format-List
+            "HERMES_INSTALL=$($pkg.InstallLocation)" >> $env:GITHUB_ENV
             $manifest = Get-AppxPackageManifest -Package $pkg.PackageFullName
             $manifest.Package.Dependencies | Format-List
             $app = @($manifest.Package.Applications.Application)[0]
@@ -83,3 +100,34 @@ jobs:
             "INSTALL_OR_ACTIVATION_FAILED: $($_ | Out-String)"
             throw
           }
+      - name: Exercise installed packaged Hermes terminal implementation
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTK_TELEMETRY_DISABLED: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:HERMES_INSTALL 'app/resources/agent-payload'
+          $stamp = Get-Content (Join-Path $env:HERMES_INSTALL 'app/resources/install-stamp.json') -Raw | ConvertFrom-Json
+          $stamp | ConvertTo-Json -Depth 8
+          $python = Join-Path $root $stamp.runtime.storePython
+          $source = Join-Path $root $stamp.runtime.repoDir
+          $deps = Join-Path $root $stamp.runtime.sitePackages
+          $repo = Join-Path $env:RUNNER_TEMP 'rtk-hermes-command-repo'
+          git init -q $repo
+          if ($LASTEXITCODE) { throw 'Fixture git init failed' }
+          $release = gh api repos/rtk-ai/rtk/releases/tags/v1.1.0 | ConvertFrom-Json
+          $asset = $release.assets | Where-Object name -EQ 'rtk-x86_64-pc-windows-msvc.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'rtk-original.zip'
+          Invoke-WebRequest $asset.browser_download_url -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($asset.digest -ne "sha256:$hash") { throw 'Original RTK release digest mismatch' }
+          Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'rtk-original')
+          $original = (Get-ChildItem (Join-Path $env:RUNNER_TEMP 'rtk-original') -Recurse -Filter rtk.exe).FullName
+          $fixed = (Resolve-Path 'rtk-final/target/x86_64-pc-windows-msvc/debug/rtk.exe').Path
+          $env:HERMES_HOME = Join-Path $env:RUNNER_TEMP 'hermes-probe-home'
+          $env:TERMINAL_ENV = 'local'
+          $env:PYTHONPATH = "$source;$deps"
+          $env:PYTHONPYCACHEPREFIX = Join-Path $env:RUNNER_TEMP 'hermes-pycache'
+          & $python .diagnostics/hermes/runtime_probe.py $root $source $deps $repo $original $fixed
+          if ($LASTEXITCODE) { throw "Packaged-runtime probe failed: $LASTEXITCODE" }
