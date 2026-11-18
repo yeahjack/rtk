@@ -1,0 +1,21 @@
+name: Diagnose Windows PATH 5028
+on:
+  push:
+    branches: [investigate/windows-path-5028]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Build isolated resolver probe
+        run: cargo build --manifest-path .diagnostics/5028/probe/Cargo.toml
+      - name: Compare temporary ACL fixtures
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTK_TELEMETRY_DISABLED: '1'
+        run: ./.diagnostics/5028/run.ps1

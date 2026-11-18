@@ -1,0 +1,7 @@
+[package]
+name = "path-5028-probe"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+which = "=8.0.6"
