@@ -28,16 +28,16 @@ fn select(name: &str, candidates: impl Iterator<Item = PathBuf>) -> which::Resul
 }
 
 fn access_denied(path: &Path) -> bool {
-    // Reject demonstrated inaccessible candidates, not guarantee execution.
-    // Unlike GENERIC_READ, these narrow rights do not require READ_CONTROL
-    // or SYNCHRONIZE. Batch scripts are read
-    // by cmd.exe and need not have FILE_EXECUTE permission themselves.
+    // This is a narrow access probe, not an execution guarantee. Images can
+    // execute without FILE_READ_DATA; batch scripts are instead read by cmd.exe
+    // and need not have FILE_EXECUTE permission. Do not request GENERIC_READ,
+    // READ_CONTROL or SYNCHRONIZE and reject otherwise usable candidates.
     const FILE_READ_DATA: u32 = 0x0001;
     const FILE_EXECUTE: u32 = 0x0020;
     let batch = path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
-    let access = FILE_READ_DATA | if batch { 0 } else { FILE_EXECUTE };
+    let access = if batch { FILE_READ_DATA } else { FILE_EXECUTE };
     OpenOptions::new()
         .access_mode(access)
         .open(path)
@@ -122,7 +122,7 @@ mod tests {
         let usable = good.join("rtk-path-probe.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &denied).unwrap();
         std::fs::copy(std::env::current_exe().unwrap(), &usable).unwrap();
-        for right in ["ExecuteFile", "ReadData", "ReadAndExecute"] {
+        for right in ["ExecuteFile", "ReadAndExecute"] {
             let _acl = DeniedFile::new(&denied, right);
             assert!(std::fs::symlink_metadata(&denied).unwrap().is_file());
             assert_eq!(
@@ -131,7 +131,8 @@ mod tests {
                     .output()
                     .unwrap_err()
                     .kind(),
-                ErrorKind::PermissionDenied
+                ErrorKind::PermissionDenied,
+                "denial: {right}"
             );
             assert_eq!(
                 search("rtk-path-probe", &[&bad, &good], temp.path()).unwrap(),
@@ -157,6 +158,27 @@ mod tests {
             let relative = Path::new("restricted directory").join("rtk-path-probe.exe");
             assert_eq!(
                 search(relative.to_str().unwrap(), &[&good], temp.path()).unwrap(),
+                denied
+            );
+        }
+        // Read and execute permissions are distinct for native images. A
+        // loadable image must not be skipped just because ordinary reads fail.
+        {
+            let _acl = DeniedFile::new(&denied, "ReadData");
+            assert_eq!(
+                std::fs::File::open(&denied).unwrap_err().kind(),
+                ErrorKind::PermissionDenied
+            );
+            assert!(
+                Command::new(&denied)
+                    .arg("--list")
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            assert_eq!(
+                search("rtk-path-probe", &[&bad, &good], temp.path()).unwrap(),
                 denied
             );
         }
