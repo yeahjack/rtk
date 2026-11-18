@@ -147,7 +147,8 @@ jobs:
           }
           foreach ($candidate in $candidates) {
             "ACTUAL_CANDIDATE=$($candidate.FullName)"
-            Get-Acl -LiteralPath $candidate.FullName | Select-Object Owner,AccessToString | Format-List
+            try { Get-Acl -LiteralPath $candidate.FullName | Select-Object Owner,AccessToString | Format-List }
+            catch { "ACL_READ_DENIED_OR_UNAVAILABLE: $($_.Exception.Message)" }
             foreach ($order in @('first','last')) {
               $dir = $candidate.DirectoryName
               $env:PATH = if ($order -eq 'first') { "$dir;$plainPath" } else { "$plainPath;$dir" }
