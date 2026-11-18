@@ -1,0 +1,35 @@
+name: Probe official Hermes MSIX host
+on:
+  push:
+    branches: [investigate/hermes-msix-5028]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Inspect disposable runner capabilities
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,ProductType | Format-List
+          "SessionId=$((Get-Process -Id $PID).SessionId) UserInteractive=$([Environment]::UserInteractive)"
+          query session
+          Get-Command Add-AppxPackage,Get-AppxPackage,winget -ErrorAction SilentlyContinue | Select-Object Name,Source | Format-Table
+          Get-Service AppXSvc,ClipSVC -ErrorAction SilentlyContinue | Select-Object Name,Status,StartType | Format-Table
+          Get-AppxPackage | Where-Object Name -Match 'DesktopAppInstaller|WindowsStore|Hermes' | Select-Object Name,Version,PackageFullName | Format-Table
+          $global:LASTEXITCODE = 0
+      - name: Check official package feeds without changing trust or accounts
+        shell: pwsh
+        run: |
+          foreach ($channel in 'stable','canary') {
+            $url = "https://hermes-assets.nousresearch.com/releases/win32/$channel/$channel.appinstaller"
+            try { $response = Invoke-WebRequest $url; "URL=$url HTTP=$($response.StatusCode)"; $response.Content }
+            catch { "URL=$url ERROR=$($_.Exception.Message)" }
+          }
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget --version
+            winget show --id 9PMXK8CZC7KR --source msstore --disable-interactivity
+            "winget-show-exit=$LASTEXITCODE"
+          }
+          $global:LASTEXITCODE = 0
