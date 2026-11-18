@@ -33,3 +33,35 @@ jobs:
             "winget-show-exit=$LASTEXITCODE"
           }
           $global:LASTEXITCODE = 0
+      - name: Verify and install official signed stable MSIX on disposable runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $feed = 'https://hermes-assets.nousresearch.com/releases/win32/stable/stable.appinstaller'
+          $descriptor = Join-Path $env:RUNNER_TEMP 'hermes.appinstaller'
+          Invoke-WebRequest $feed -OutFile $descriptor
+          [xml]$xml = Get-Content $descriptor -Raw
+          $bundle = $xml.AppInstaller.MainBundle
+          if ($bundle.Name -ne 'NousResearch.HermesBundled' -or $bundle.Publisher -ne 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US') { throw 'Unexpected official feed identity' }
+          if (([uri]$bundle.Uri).Host -ne 'hermes-assets.nousresearch.com' -or ([uri]$bundle.Uri).Scheme -ne 'https') { throw 'Unexpected artifact origin' }
+          $file = Join-Path $env:RUNNER_TEMP 'hermes.msixbundle'
+          Invoke-WebRequest $bundle.Uri -OutFile $file
+          Get-FileHash $file -Algorithm SHA256 | Format-List
+          $signature = Get-AuthenticodeSignature $file
+          $signature | Select-Object Status,StatusMessage,SignerCertificate | Format-List
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -ne $bundle.Publisher) { throw 'Not a trusted matching publisher signature' }
+          try {
+            Add-AppxPackage -Path $file -ErrorAction Stop
+            $pkg = Get-AppxPackage -Name $bundle.Name
+            $pkg | Select-Object Name,Version,PackageFullName,PackageFamilyName,InstallLocation | Format-List
+            $manifest = Get-AppxPackageManifest -Package $pkg.PackageFullName
+            $manifest.Package.Dependencies | Format-List
+            $app = @($manifest.Package.Applications.Application)[0]
+            "APP_ID=$($app.Id) EXECUTABLE=$($app.Executable)"
+            Start-Process explorer.exe -ArgumentList "shell:AppsFolder\$($pkg.PackageFamilyName)!$($app.Id)"
+            Start-Sleep -Seconds 20
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$($pkg.InstallLocation)*" } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine | Format-List
+          } catch {
+            "INSTALL_OR_ACTIVATION_FAILED: $($_ | Out-String)"
+            throw
+          }
