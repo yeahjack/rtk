@@ -25,6 +25,8 @@ jobs:
           CARGO_INCREMENTAL: '0'
           CARGO_PROFILE_DEV_DEBUG: '0'
         run: cargo build --locked --manifest-path rtk-final/Cargo.toml --no-default-features --target x86_64-pc-windows-msvc
+      - name: Build read-only native PATH probe
+        run: cargo build --manifest-path .diagnostics/5028/probe/Cargo.toml
       - name: Inspect disposable runner capabilities
         shell: pwsh
         run: |
@@ -100,7 +102,7 @@ jobs:
             "INSTALL_OR_ACTIVATION_FAILED: $($_ | Out-String)"
             throw
           }
-      - name: Exercise installed packaged Hermes terminal implementation
+      - name: Compare RTK against actual installed MSIX git candidates
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,9 +127,37 @@ jobs:
           Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'rtk-original')
           $original = (Get-ChildItem (Join-Path $env:RUNNER_TEMP 'rtk-original') -Recurse -Filter rtk.exe).FullName
           $fixed = (Resolve-Path 'rtk-final/target/x86_64-pc-windows-msvc/debug/rtk.exe').Path
-          $env:HERMES_HOME = Join-Path $env:RUNNER_TEMP 'hermes-probe-home'
-          $env:TERMINAL_ENV = 'local'
-          $env:PYTHONPATH = "$source;$deps"
-          $env:PYTHONPYCACHEPREFIX = Join-Path $env:RUNNER_TEMP 'hermes-pycache'
-          & $python .diagnostics/hermes/runtime_probe.py $root $source $deps $repo $original $fixed
-          if ($LASTEXITCODE) { throw "Packaged-runtime probe failed: $LASTEXITCODE" }
+          $plainPath = $env:PATH
+          $probe = (Resolve-Path '.diagnostics/5028/probe/target/debug/path-5028-probe.exe').Path
+          $gitRoots = @(Get-ChildItem (Join-Path $root 'tools') -Directory | Where-Object Name -Match '^git-')
+          $candidates = @($gitRoots | ForEach-Object { Get-ChildItem $_.FullName -Filter git.exe -Recurse -File } | Sort-Object FullName)
+          if (-not $candidates.Count) { throw 'No actual packaged Git executable found; no substitute fixture will be used' }
+          "ACTUAL_PACKAGED_GIT_CANDIDATES"
+          $candidates | Select-Object FullName,Length | Format-Table -Wrap
+          $package = Get-AppxPackage -Name NousResearch.HermesBundled
+          $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+          "REGISTERED_APPLICATION_EXTENSIONS"
+          $manifest.Package.Applications.OuterXml
+          Get-Command Invoke-CommandInDesktopPackage -ErrorAction SilentlyContinue | Select-Object Name,Source | Format-Table
+          Set-Location $repo
+          foreach ($rtk in @($original,$fixed)) {
+            & $rtk --version
+            & $rtk git status 2>&1 | ForEach-Object { "PLAIN_RESULT $_" }
+            "PLAIN_EXIT=$LASTEXITCODE RTK=$rtk"
+          }
+          foreach ($candidate in $candidates) {
+            "ACTUAL_CANDIDATE=$($candidate.FullName)"
+            Get-Acl -LiteralPath $candidate.FullName | Select-Object Owner,AccessToString | Format-List
+            foreach ($order in @('first','last')) {
+              $dir = $candidate.DirectoryName
+              $env:PATH = if ($order -eq 'first') { "$dir;$plainPath" } else { "$plainPath;$dir" }
+              "ACTUAL_MSIX_ORDER=$order DIRECTORY=$dir"
+              & $probe $dir
+              foreach ($rtk in @($original,$fixed)) {
+                & $rtk git status 2>&1 | ForEach-Object { "MSIX_RESULT $_" }
+                "MSIX_EXIT=$LASTEXITCODE RTK=$rtk ORDER=$order CANDIDATE=$($candidate.FullName)"
+              }
+            }
+          }
+          $env:PATH = $plainPath
+          $global:LASTEXITCODE = 0
