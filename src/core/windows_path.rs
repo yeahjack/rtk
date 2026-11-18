@@ -29,8 +29,8 @@ fn select(name: &str, candidates: impl Iterator<Item = PathBuf>) -> which::Resul
 
 fn access_denied(path: &Path) -> bool {
     // Reject demonstrated inaccessible candidates, not guarantee execution.
-    // Unlike GENERIC_READ, these narrow rights
-    // this does not require READ_CONTROL or SYNCHRONIZE. Batch scripts are read
+    // Unlike GENERIC_READ, these narrow rights do not require READ_CONTROL
+    // or SYNCHRONIZE. Batch scripts are read
     // by cmd.exe and need not have FILE_EXECUTE permission themselves.
     const FILE_READ_DATA: u32 = 0x0001;
     const FILE_EXECUTE: u32 = 0x0020;
@@ -163,6 +163,30 @@ mod tests {
             denied
         );
         assert!(search("rtk-missing-path-probe", &[&bad, &good], temp.path()).is_err());
+    }
+
+    #[test]
+    fn keeps_pathext_precedence_and_unknown_probe_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("rtk-order.cmd"), "@echo off\r\n").unwrap();
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            temp.path().join("rtk-order.exe"),
+        )
+        .unwrap();
+        let paths = std::env::join_paths([temp.path()]).unwrap();
+        let original = which::which_in("rtk-order", Some(&paths), temp.path()).unwrap();
+        assert_eq!(
+            search("rtk-order", &[temp.path()], temp.path()).unwrap(),
+            original
+        );
+        // A sharing violation, disappearance, or other unknown probe failure
+        // is not permission to silently change the executable.
+        let gone = temp.path().join("disappeared.exe");
+        assert_eq!(
+            select("disappeared", [gone.clone(), original].into_iter()).unwrap(),
+            gone
+        );
     }
 
     #[test]
