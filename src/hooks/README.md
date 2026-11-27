@@ -38,6 +38,27 @@ LLM agent integration layer that installs, validates, and executes command-rewri
 | Hermes | `rtk init --agent hermes` | Python plugin in `~/.hermes/plugins/rtk-rewrite/` | `config.yaml` `plugins.enabled` |
 
 
+## Live Hook Decisions
+
+Run `rtk showlive` in a separate terminal, then use Claude Code as usual. The
+view waits for the local tracking database if it has not been created yet and
+shows newly recorded decisions in insertion order, not the backlog. Press
+Ctrl-C to stop. Restart the follower after clearing or replacing the tracking
+database.
+
+Each line shows the UTC time, a built-in RTK command label (or `Other`), and
+whether the hook proposed a rewrite. A proposal is not proof that the command
+ran or that the host approved it. Labels are classifications, not the exact
+original or proposed command. Arguments, paths, session identifiers, output,
+and token savings are not displayed.
+
+This reads the existing `hook_decisions` table in the same tracking database
+as RTK (including `RTK_DB_PATH` overrides). It does not enable telemetry, audit
+logging, or a hook. It shows only the Claude Code PreToolUse decisions RTK
+actually records, which require session and tool-use IDs. Pipeline-handled or
+ignored calls may not produce records, and other agent hooks are not covered.
+`rtk hook-audit` is separate and summarizes the optional text audit log.
+
 ## Integrity Verification
 
 The integrity system prevents unauthorized hook modifications:

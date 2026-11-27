@@ -478,6 +478,29 @@ pub(crate) fn open_existing_and_migrate<V: Version>(
     claim(conn, identity, path, schema, mode, flags).map(Some)
 }
 
+/// Read an existing database without creating, migrating or changing its permissions.
+pub(crate) fn open_existing_readonly<V>(
+    path: &Path,
+    schema: &Schema<V>,
+) -> Result<Option<Connection>> {
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let label = schema.label();
+    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(_) if !path.try_exists()? => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open the {label} database"));
+        }
+    };
+    // A follower can try again on its next poll rather than wait behind a writer.
+    conn.busy_timeout(std::time::Duration::from_millis(50))?;
+    let (tag, stamp) = read_identity(&conn, label)?;
+    check_owner(&conn, schema, tag, stamp)?;
+    Ok(Some(conn))
+}
+
 /// Opens the file if it is there and reads its tag and stamp.
 fn open_existing_and_read(
     path: &Path,

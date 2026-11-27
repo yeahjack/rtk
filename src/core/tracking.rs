@@ -2315,6 +2315,10 @@ pub(crate) fn get_db_path() -> Result<PathBuf> {
     Ok(user_dirs::data_under(".").join(HISTORY_DB))
 }
 
+pub(crate) fn open_hook_decision_history(path: &std::path::Path) -> Result<Option<Connection>> {
+    db::open_existing_readonly(path, &SCHEMA)
+}
+
 /// Open (creating if needed) the tracking DB, apply pragmas, and run schema
 /// migrations per `mode`. Shared by `Tracker::new()` (hot path, gated) and
 /// `ensure_schema_fresh` (`rtk init`, unconditional).

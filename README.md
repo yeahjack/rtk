@@ -144,6 +144,8 @@ The part 85k developers starred. Built by 200+ contributors, written against rea
 
 100+ commands across Git, GitHub CLI, Cargo/Rust, JavaScript (npm, pnpm, vitest, jest, tsc, Next.js, Angular, Playwright, Prisma), Python (ruff, pytest, mypy, pip), Go (go test, golangci-lint), Ruby, .NET, JVM (Gradle, Maven), PHP, Docker, Kubernetes, AWS, Terraform, and the file/search builtins. Every command and its filter: **[What RTK Optimizes](https://www.rtk-ai.app/docs/resources/what-rtk-covers/)**
 
+Run `rtk showlive` in a separate terminal to follow new [recorded Claude Code hook decisions](src/hooks/README.md#live-hook-decisions), without showing command arguments or output.
+
 **Three promises**
 
 - **Never blocks.** If a filter fails, you get the raw output, and the command's exit code is passed through unchanged.

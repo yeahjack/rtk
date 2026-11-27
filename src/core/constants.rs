@@ -21,6 +21,7 @@ pub const RTK_META_COMMANDS: &[&str] = &[
     "run",
     "hook",
     "hook-audit",
+    "showlive",
     "pipe",
     "cc-economics",
     "verify",

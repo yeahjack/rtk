@@ -1072,6 +1072,9 @@ enum Commands {
         since: u64,
     },
 
+    /// Follow newly recorded Claude Code hook decisions (no command arguments)
+    Showlive,
+
     /// Rewrite a raw command to its RTK equivalent (single source of truth for hooks)
     ///
     /// Exit codes (a hook must handle all four). The rules are Claude Code's
@@ -2498,13 +2501,15 @@ fn require_single_script(subcommand: &str, shell: Option<&str>, command: &[Strin
 /// `rtk hook …` command does not: the hook processors run before every
 /// command an agent runs. Neither does `rtk telemetry forget`: the send thread
 /// would outlive the command and could write the ping marker back after
-/// `forget` deleted it. Anything clap rejects (help, version, a passthrough
+/// `forget` deleted it. `showlive` is a read-only view and does not ping.
+/// Anything clap rejects (help, version, a passthrough
 /// command) still runs it.
 fn pings_telemetry(parsed: &Result<Cli, clap::Error>) -> bool {
     !matches!(
         parsed,
         Ok(Cli {
             command: Commands::Hook { .. }
+                | Commands::Showlive
                 | Commands::Telemetry {
                     command: core::telemetry_cmd::TelemetrySubcommand::Forget,
                 },
@@ -2535,12 +2540,14 @@ fn run_cli() -> Result<i32> {
     // Skip for Gain (shows its own inline warning), Init/Verify (manage the
     // hook themselves), and Hook: its stderr lands in the agent's hook
     // stream, and the parse behind the check has no place on the hook path.
+    // Showlive is read-only, including avoiding the reminder marker.
     if !matches!(
         cli.command,
         Commands::Gain(..)
             | Commands::Init { .. }
             | Commands::Verify { .. }
             | Commands::Hook { .. }
+            | Commands::Showlive
     ) {
         hooks::hook_check::maybe_warn();
     }
@@ -3642,6 +3649,11 @@ fn run_cli() -> Result<i32> {
         Commands::Mvn { args } => mvn_cmd::run(&args, cli.verbose)?,
 
         Commands::Mvnd { args } => mvn_cmd::run_daemon(&args, cli.verbose)?,
+
+        Commands::Showlive => {
+            hooks::hook_follow::run()?;
+            0
+        }
 
         Commands::HookAudit { since } => {
             hooks::hook_audit_cmd::run(since, cli.verbose)?;
@@ -5266,6 +5278,11 @@ mod tests {
                 "{args:?} must not ping"
             );
         }
+    }
+
+    #[test]
+    fn showlive_skips_the_telemetry_ping() {
+        assert!(!pings_telemetry(&try_parse_cli_from(["rtk", "showlive"])));
     }
 
     #[test]
