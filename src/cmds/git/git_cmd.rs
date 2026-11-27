@@ -483,9 +483,15 @@ fn show_cmd(
     cmd
 }
 
+pub(crate) fn show_line_budget() -> Option<usize> {
+    user_env::var("RTK_GIT_SHOW_MAX_LINES")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+}
+
 fn run_show(
     args: &[String],
-    max_lines: Option<usize>,
+    line_budget: Option<usize>,
     verbose: u8,
     global_args: &[String],
 ) -> Result<i32> {
@@ -636,7 +642,7 @@ fn run_show(
         };
         // A blob dump is unfiltered file content: cap large text blobs to a byte
         // budget with a tail-recovery pointer, mirroring how the commit-diff path
-        // below caps at `max_lines`. `--max-lines` does not apply here — blob output
+        // below caps at `max_lines`. The commit-preview budget does not apply here: blob output
         // is bounded by bytes, not lines.
         //
         // Window ONLY when git emits exactly this one blob and nothing that makes the
@@ -699,6 +705,9 @@ fn run_show(
         );
         return Ok(raw_result.exit_code);
     }
+    if line_budget.is_some() && !raw_result.stderr.is_empty() {
+        eprint!("{}", raw_result.stderr);
+    }
     let raw_output = raw_result.stdout;
 
     // Step 1: one-line commit summary
@@ -754,6 +763,7 @@ fn run_show(
     // Step 3: compacted diff
     // No `--patch` here: a patch is `show`'s default, and forcing it would override a user
     // `-s`/`--no-patch`, whose whole point is that there is no body to print.
+    let mut diff_truncated = false;
     let mut diff_cmd = show_cmd(global_args, args, &tokens, &["--pretty=format:"], false);
     let diff_result = exec_capture(&mut diff_cmd).context("Failed to run git show (diff)")?;
     let diff_text = diff_result.stdout.trim();
@@ -762,17 +772,64 @@ fn run_show(
         if verbose > 0 {
             printed.push_str("\n\nChanges:");
         }
-        let compacted = compact_diff(&strip_ansi(diff_text), max_lines.unwrap_or(500));
+        let diff = strip_ansi(diff_text);
+        let max_lines = 500;
+        let compacted = if let Some(limit) = line_budget {
+            let (diff, truncated) =
+                render_compact_diff(&diff, max_lines.min(limit), MAX_DIFF_HUNK_LINES.min(limit));
+            diff_truncated = truncated;
+            diff
+        } else {
+            compact_diff(&diff, max_lines)
+        };
         printed.push('\n');
         printed.push_str(&compacted);
     }
 
-    let shown = never_worse(&raw_output, &printed);
-    println!("{}", shown);
-
-    timer.track(&tracked, &format!("rtk {tracked}"), &raw_output, shown);
+    if let Some(limit) = line_budget {
+        let shown = emit_budgeted_show(
+            &printed,
+            &raw_output,
+            limit,
+            diff_truncated,
+            global_args,
+            args,
+        );
+        timer.track(&tracked, &format!("rtk {tracked}"), &raw_output, &shown);
+    } else {
+        let shown = never_worse(&raw_output, &printed);
+        println!("{}", shown);
+        timer.track(&tracked, &format!("rtk {tracked}"), &raw_output, shown);
+    }
 
     Ok(0)
+}
+
+fn emit_budgeted_show(
+    preview: &str,
+    raw: &str,
+    limit: usize,
+    diff_truncated: bool,
+    global_args: &[String],
+    args: &[String],
+) -> String {
+    if !diff_truncated && preview.lines().count() <= limit {
+        return runner::emit_guarded(preview, None, raw);
+    }
+    let forwarded: Vec<_> = global_args
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once("show"))
+        .chain(args.iter().map(String::as_str))
+        .collect();
+    // Like blob recovery, go through the raw proxy so a hook cannot apply the budget again.
+    let hint = format!("[full diff: rtk proxy git {}]", display_args(&forwarded));
+    let Some(preview_lines) = limit.checked_sub(hint.lines().count()) else {
+        // Quoted arguments can span multiple lines. Do not cut the recovery command.
+        return runner::emit_guarded(raw, None, raw);
+    };
+    let head: String = preview.split_inclusive('\n').take(preview_lines).collect();
+    runner::emit_guarded(&head, Some(&hint), raw)
 }
 
 /// Whether these args make git emit a word diff rather than a line diff.
@@ -1332,7 +1389,17 @@ fn flush_leading_context(
     *total += keep;
 }
 
+const MAX_DIFF_HUNK_LINES: usize = 100;
+
 pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
+    let (mut preview, was_truncated) = render_compact_diff(diff, max_lines, MAX_DIFF_HUNK_LINES);
+    if was_truncated {
+        preview.push_str("\n[full diff: rtk git diff --no-compact]");
+    }
+    preview
+}
+
+fn render_compact_diff(diff: &str, max_lines: usize, max_hunk_lines: usize) -> (String, bool) {
     let mut result = Vec::new();
     let mut current_file = String::new();
     let mut added = 0;
@@ -1343,7 +1410,6 @@ pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
     let mut skipped_del = 0usize;
     let mut leading_context: Vec<String> = Vec::new();
     let mut leading_context_total = 0usize;
-    let max_hunk_lines = 100;
     // Context before a hunk's first change, up to three lines per hunk and
     // `max_lines / 10` across the diff. It does not count against `max_lines`,
     // so it cannot displace change lines, and the diff-wide cap is what bounds
@@ -1500,11 +1566,7 @@ pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
         result.push(format!("  +{} -{}", added, removed));
     }
 
-    if was_truncated {
-        result.push("[full diff: rtk git diff --no-compact]".to_string());
-    }
-
-    result.join("\n")
+    (result.join("\n"), was_truncated)
 }
 
 /// RTK's default `git log` limit, applied whenever the user names none.
@@ -5337,6 +5399,17 @@ mod tests {
             code, 0,
             "corrupt-index git status must not be reported as success"
         );
+    }
+
+    #[test]
+    fn test_budgeted_show_keeps_raw_when_recovery_would_exceed_the_budget_or_raw_cost() {
+        let raw = "a\nb\n";
+        for arg in ["HEAD", "two\nlines"] {
+            assert_eq!(
+                emit_budgeted_show(raw, raw, 1, false, &[], &[arg.into()]),
+                raw
+            );
+        }
     }
 
     #[test]

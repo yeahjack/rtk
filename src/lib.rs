@@ -2678,7 +2678,7 @@ fn run_cli() -> Result<i32> {
                 GitCommands::Show { args } => git_cmd::run(
                     git_cmd::GitCommand::Show,
                     &args,
-                    None,
+                    git_cmd::show_line_budget(),
                     cli.verbose,
                     &global_args,
                 )?,

@@ -454,6 +454,24 @@ rtk git show [args...]
 
 Shows the commit summary + stat + compact diff.
 
+To shorten the commit preview in an agent that already truncates tool
+output, opt in with a positive line budget:
+
+```bash
+RTK_GIT_SHOW_MAX_LINES=20 rtk git show HEAD
+```
+
+The budget counts the summary, stat, diff and recovery notice on stdout.
+Unset, zero or invalid values retain the default. Explicit output formats
+(such as `--stat` or `--format`), `--no-patch`, blob output and Git errors
+are not budgeted. This is a line target, not a byte or token limit. RTK can
+return the raw output if the recovery command doesn't fit or if the preview
+would cost more than Git's output.
+
+Follow the notice's `rtk proxy git … show …` command for the full diff. It
+reruns Git with the original arguments, including the path filter, rather
+than storing a snapshot; a movable ref such as `HEAD` may have changed.
+
 > **Warning (redirecting to a file).** For a large blob
 > (`rtk git show HEAD:large-file`), the output is windowed: only a preview
 > is shown, followed by a hint
